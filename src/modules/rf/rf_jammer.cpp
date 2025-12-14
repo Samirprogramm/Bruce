@@ -10,11 +10,12 @@ void RFJammer::setup() {
     nTransmitterPin = bruceConfig.rfTx;
     if (!initRfModule("tx")) return;
 
-    if (bruceConfig.rfModule == CC1101_SPI_MODULE) { // CC1101 in use
+    if (bruceConfig.rfModule == CC1101_SPI_MODULE) {
         nTransmitterPin = bruceConfigPins.CC1101_bus.io0;
     }
 
-    bool sendRF = true;
+    sendRF = true;
+    returnToMenu = false;
 
     display_banner();
 
@@ -31,22 +32,23 @@ void RFJammer::display_banner() {
     padprintln("");
 
     tft.setTextColor(getColorVariation(bruceConfig.priColor), bruceConfig.bgColor);
-    padprintln("Press [ESC] for options.");
+    padprintln("Press [ESC] to stop.");
     tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
 }
 
 void RFJammer::run_full_jammer() {
-    digitalWrite(nTransmitterPin, HIGH); // Turn on Jammer
-    int tmr0 = millis();                 // control total jammer time;
+    digitalWrite(nTransmitterPin, HIGH); // Jammer ON
 
     while (sendRF) {
-        if (check(EscPress) || (millis() - tmr0 > 20000)) {
+        if (check(EscPress)) {
             sendRF = false;
             returnToMenu = true;
             break;
         }
+        yield(); // Watchdog verhindern
     }
-    digitalWrite(nTransmitterPin, LOW); // Turn off Jammer
+
+    digitalWrite(nTransmitterPin, LOW); // Jammer OFF
 }
 
 void RFJammer::run_itmt_jammer() {
@@ -55,21 +57,19 @@ void RFJammer::run_itmt_jammer() {
     while (sendRF) {
         for (int sequence = 1; sequence < 50; sequence++) {
             for (int duration = 1; duration <= 3; duration++) {
-                // Moved Escape check into this loop to check every cycle
                 if (check(EscPress) || (millis() - tmr0) > 20000) {
                     sendRF = false;
                     returnToMenu = true;
                     break;
                 }
-                digitalWrite(nTransmitterPin, HIGH); // Ativa o pino
-                // keeps the pin active for a while and increase increase
+                digitalWrite(nTransmitterPin, HIGH);
                 for (int widthsize = 1; widthsize <= (1 + sequence); widthsize++) { delayMicroseconds(10); }
 
-                digitalWrite(nTransmitterPin, LOW); // Desativa o pino
-                // keeps the pin inactive for the same time as before
+                digitalWrite(nTransmitterPin, LOW);
                 for (int widthsize = 1; widthsize <= (1 + sequence); widthsize++) { delayMicroseconds(10); }
             }
+            if (!sendRF) break;
         }
     }
-    digitalWrite(nTransmitterPin, LOW); // Turn off Jammer
+    digitalWrite(nTransmitterPin, LOW);
 }
