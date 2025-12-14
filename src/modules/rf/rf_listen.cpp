@@ -1,98 +1,75 @@
-#include "rf_listen.h"
+#include "rf_jammer.h"
+#include "core/display.h"
+#include "rf_utils.h"
 
-#include "../others/audio.h"
+RFJammer::RFJammer(bool full) : fullJammer(full) { setup(); }
 
-volatile unsigned long lastMicros = 0;
-volatile unsigned long pulseMicros = 0;
-volatile float ___frequency = 0;
-volatile unsigned long pulseDuration = 0;
-volatile bool newPulse = false;
+RFJammer::~RFJammer() { deinitRfModule(); }
 
-void IRAM_ATTR onPulse() {
-    static bool wasHigh = false;
-    unsigned long now = micros();
+void RFJammer::setup() {
+    nTransmitterPin = bruceConfig.rfTx;
+    if (!initRfModule("tx")) return;
 
-    if (digitalRead(bruceConfigPins.CC1101_bus.io0)) {
-        pulseDuration = now - lastMicros;
-        ___frequency = 1000000.0 / pulseDuration;
-        newPulse = true;
-        wasHigh = true;
-    } else if (wasHigh) {
-        lastMicros = now;
-        wasHigh = false;
+    if (bruceConfig.rfModule == CC1101_SPI_MODULE) {
+        nTransmitterPin = bruceConfigPins.CC1101_bus.io0;
     }
+
+    sendRF = true;
+    returnToMenu = false;
+
+    display_banner();
+
+    if (fullJammer) return run_full_jammer();
+    else run_itmt_jammer();
 }
 
-void rf_listen() {
-    float freq = 433.92;
-    float last_freq = -1;
-    bool redraw = false;
-    while (!check(SelPress) && !check(EscPress)) {
-        if (check(PrevPress)) { freq -= 0.1f; }
-        if (check(NextPress)) { freq += 0.1f; }
+void RFJammer::display_banner() {
+    drawMainBorderWithTitle("RF Jammer");
+    printSubtitle(String(fullJammer ? "Full Jammer" : "Intermittent Jammer"));
 
-        freq = constrain(freq, 300.0f, 928.0f);
-        if (freq != last_freq) {
-            redraw = true;
-            last_freq = freq;
-        } else {
-            redraw = false;
+    padprintln("Sending...");
+    padprintln("");
+    padprintln("");
+
+    tft.setTextColor(getColorVariation(bruceConfig.priColor), bruceConfig.bgColor);
+    padprintln("Press [ESC] to stop.");
+    tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
+}
+
+void RFJammer::run_full_jammer() {
+    digitalWrite(nTransmitterPin, HIGH); // Jammer ON
+
+    while (sendRF) {
+        if (check(EscPress)) {
+            sendRF = false;
+            returnToMenu = true;
+            break;
         }
-
-        if (redraw) {
-            String text = String("Frequency: ") + String(freq, 2) + String("MHz");
-            displayRedStripe(text, getComplementaryColor2(bruceConfig.priColor), bruceConfig.priColor);
-        }
-
-        if (check(EscPress)) break;
-        if (check(SelPress)) break;
+        yield(); // Watchdog verhindern
     }
 
-    if (bruceConfig.rfModule != CC1101_SPI_MODULE) {
-        displayError("Listener needs a CC1101!", true);
-        return;
-    }
-    if (!initRfModule("rx", freq)) {
-        displayError("CC1101 not found!", true);
-        return;
-    }
+    digitalWrite(nTransmitterPin, LOW); // Jammer OFF
+}
 
-    ELECHOUSE_cc1101.setRxBW(58);
-    ELECHOUSE_cc1101.setModulation(2);
-    ELECHOUSE_cc1101.setDcFilterOff(true);
-    attachInterrupt(digitalPinToInterrupt(bruceConfigPins.CC1101_bus.io0), onPulse, CHANGE);
-    displayRedStripe("Listening...", getComplementaryColor2(bruceConfig.priColor), bruceConfig.priColor);
+void RFJammer::run_itmt_jammer() {
+    int tmr0 = millis();
 
-    unsigned long lastPulseTime = millis();
-    bool pulseActive = false;
+    while (sendRF) {
+        for (int sequence = 1; sequence < 50; sequence++) {
+            for (int duration = 1; duration <= 3; duration++) {
+                if (check(EscPress) || (millis() - tmr0) > 20000) {
+                    sendRF = false;
+                    returnToMenu = true;
+                    break;
+                }
+                digitalWrite(nTransmitterPin, HIGH);
+                for (int widthsize = 1; widthsize <= (1 + sequence); widthsize++) { delayMicroseconds(10); }
 
-    while (check(EscPress)) { delay(10); }
-
-    while (!check(EscPress)) {
-        displayRedStripe(
-            "Waiting for a pulse", getComplementaryColor2(bruceConfig.priColor), bruceConfig.priColor
-        );
-        if (newPulse) {
-            newPulse = false;
-            lastPulseTime = millis();
-            pulseActive = true;
-            String pulseText = String("Freq: ") + String(___frequency, 2) + String(" Hz");
-            displayRedStripe(pulseText, getComplementaryColor2(bruceConfig.priColor), bruceConfig.priColor);
-#if defined(BUZZ_PIN)
-            tone(BUZZ_PIN, ___frequency, pulseDuration);
-#elif defined(HAS_NS4168_SPKR)
-            playTone(___frequency, pulseDuration, 0);
-#endif
+                digitalWrite(nTransmitterPin, LOW);
+                for (int widthsize = 1; widthsize <= (1 + sequence); widthsize++) { delayMicroseconds(10); }
+            }
+            if (!sendRF) break;
         }
-
-        if (pulseActive && millis() - lastPulseTime > 3000) {
-            pulseActive = false;
-            displayRedStripe("No signal", getComplementaryColor2(bruceConfig.priColor), bruceConfig.priColor);
-        }
-
-        if (check(EscPress)) break;
-        if (check(SelPress)) break;
     }
-
-    detachInterrupt(digitalPinToInterrupt(bruceConfigPins.CC1101_bus.io0));
+    digitalWrite(nTransmitterPin, LOW);
 }
